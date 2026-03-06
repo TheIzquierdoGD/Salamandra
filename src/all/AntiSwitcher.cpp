@@ -4,19 +4,19 @@
 using namespace geode::prelude;
 
 void testAuth() {
-    std::string token = "EJEMPLODESEGURIDAD";
-
     web::WebRequest request;
-    request.header("Authorization", token);
 
-    auto response = request
-        .get("https://salamandra.ps.fhgdps.com/incl/auth.php")
-        .send();  // <-- IMPORTANTE
+    request.header("Authorization", "EJEMPLODESEGURIDAD");
+
+    auto task = request
+        .get("https://salamandra.ps.fhgdps.com/incl/auth.php");
+
+    auto response = task.send();  // <- aquí está la clave
 
     if (response) {
-        log::info("Respuesta del servidor: {}", response->string());
+        log::info("Respuesta: {}", response->string());
     }
     else {
-        log::error("Error en la petición");
+        log::error("Fallo en la petición");
     }
 }
