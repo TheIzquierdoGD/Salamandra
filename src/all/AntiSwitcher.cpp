@@ -9,16 +9,11 @@ void testAuth() {
     web::WebRequest request;
     request.header("Authorization", token);
 
-    auto future = request.send(
-        web::RequestType::Get,
-        "https://salamandra.ps.fhgdps.com/incl/auth.php"
-    );
-
-    future.onResolve([](web::WebResponse& response) {
-        log::info("Respuesta del servidor: {}", response.string());
-    });
-
-    future.onReject([](std::string const& error) {
-        log::error("Error en request: {}", error);
-    });
+    request.get("https://salamandra.ps.fhgdps.com/incl/auth.php")
+        .then([](web::WebResponse const& response) {
+            log::info("Respuesta del servidor: {}", response.string());
+        })
+        .except([](std::string const& error) {
+            log::error("Error en request: {}", error);
+        });
 }
