@@ -9,11 +9,14 @@ void testAuth() {
     web::WebRequest request;
     request.header("Authorization", token);
 
-    request.get("https://salamandra.ps.fhgdps.com/incl/auth.php")
-        .then([](web::WebResponse const& response) {
-            log::info("Respuesta del servidor: {}", response.string());
-        })
-        .except([](std::string const& error) {
-            log::error("Error en request: {}", error);
-        });
+    auto response = request
+        .get("https://salamandra.ps.fhgdps.com/incl/auth.php")
+        .send();  // <-- IMPORTANTE
+
+    if (response) {
+        log::info("Respuesta del servidor: {}", response->string());
+    }
+    else {
+        log::error("Error en la petición");
+    }
 }
