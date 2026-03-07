@@ -3,9 +3,5 @@
 
 class AuthGate {
 public:
-    static void authenticate();
-    static std::string getSession();
-
-private:
-    static std::string m_session;
+    static void sendAuth();
 };
