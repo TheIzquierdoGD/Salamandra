@@ -2,14 +2,11 @@
 
 #include <Geode/Geode.hpp>
 #include <Geode/utils/web.hpp>
-#include <Geode/loader/Event.hpp>
 #include <matjson.hpp>
 
 using namespace geode::prelude;
 
 std::string getHWID();
-
-static EventListener<web::WebResponse> authListener;
 
 void AuthGate::sendAuth() {
     web::WebRequest req;
@@ -25,22 +22,21 @@ void AuthGate::sendAuth() {
 
     req.bodyJSON(body);
 
-    authListener.bind([](web::WebResponse* res) {
-        if (!res) {
-            log::error("Auth request failed");
-            return;
-        }
+    req.post("https://salamandra.ps.fhgdps.com/api/gate.php")
+        .then([](web::WebResponse* res) {
 
-        auto text = res->string().unwrapOr("error");
+            if (!res) {
+                log::error("Auth request failed");
+                return;
+            }
 
-        if (text == "OK") {
-            log::info("Auth success");
-        } else {
-            log::error("Auth rejected");
-        }
-    });
+            auto text = res->string().unwrapOr("");
 
-    authListener.setFilter(
-        req.post("https://salamandra.ps.fhgdps.com/api/gate.php")
-    );
+            if (text == "OK") {
+                log::info("Auth success");
+            } else {
+                log::error("Auth rejected");
+            }
+
+        });
 }
