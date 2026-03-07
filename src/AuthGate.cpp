@@ -1,6 +1,8 @@
 #include "AuthGate.hpp"
+
 #include <Geode/Geode.hpp>
 #include <Geode/utils/web.hpp>
+#include <matjson.hpp>
 
 using namespace geode::prelude;
 
@@ -13,14 +15,16 @@ void AuthGate::sendAuth() {
     std::string hwid = getHWID();
     std::string timestamp = std::to_string(time(nullptr));
 
-    req.bodyJSON({
+    matjson::Value body = matjson::Value::object({
         {"password", password},
         {"hwid", hwid},
         {"timestamp", timestamp}
     });
 
+    req.bodyJSON(body);
+
     req.post("https://salamandra.ps.fhgdps.com/api/gate.php")
-    .send([](web::WebResponse* res) {
+    .listen([](web::WebResponse* res) {
 
         if (!res) {
             log::error("Auth request failed");
@@ -32,12 +36,11 @@ void AuthGate::sendAuth() {
             return;
         }
 
-        auto body = res->string().unwrapOr("error");
+        auto result = res->string().unwrapOr("error");
 
-        if (body == "OK") {
+        if (result == "OK") {
             log::info("Auth success");
-        }
-        else {
+        } else {
             log::error("Auth rejected");
         }
     });
