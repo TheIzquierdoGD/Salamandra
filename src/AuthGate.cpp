@@ -8,7 +8,7 @@ using namespace geode::prelude;
 
 std::string getHWID();
 
-static EventListener<web::WebTask> authListener;
+static EventListener<web::WebResponse> authListener;
 
 void AuthGate::sendAuth() {
     web::WebRequest req;
@@ -24,19 +24,18 @@ void AuthGate::sendAuth() {
 
     req.bodyJSON(body);
 
-    authListener.bind([](web::WebTask::Event* e) {
-        if (auto res = e->getValue()) {
-            auto text = res->string().unwrapOr("error");
-
-            if (text == "OK") {
-                log::info("Auth success");
-            }
-            else {
-                log::error("Auth rejected");
-            }
-        }
-        else {
+    authListener.bind([](web::WebResponse* res) {
+        if (!res) {
             log::error("Auth request failed");
+            return;
+        }
+
+        auto text = res->string().unwrapOr("error");
+
+        if (text == "OK") {
+            log::info("Auth success");
+        } else {
+            log::error("Auth rejected");
         }
     });
 
