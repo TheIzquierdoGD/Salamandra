@@ -2,6 +2,7 @@
 
 #include <Geode/Geode.hpp>
 #include <Geode/utils/web.hpp>
+#include <Geode/loader/Event.hpp>
 #include <matjson.hpp>
 
 using namespace geode::prelude;
@@ -39,5 +40,7 @@ void AuthGate::sendAuth() {
         }
     });
 
-    authListener.setFilter(req.post("https://salamandra.ps.fhgdps.com/api/gate.php"));
+    authListener.setFilter(
+        req.post("https://salamandra.ps.fhgdps.com/api/gate.php")
+    );
 }
