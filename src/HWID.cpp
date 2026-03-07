@@ -1,13 +1,7 @@
-#include "HWID.hpp"
+#include <Windows.h>
+#include <string>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
-std::string HWID::get() {
-
-#ifdef _WIN32
-
+std::string getHWID() {
     DWORD serial = 0;
     GetVolumeInformationA(
         "C:\\",
@@ -21,11 +15,4 @@ std::string HWID::get() {
     );
 
     return std::to_string(serial);
-
-#else
-
-    return "unknown-device";
-
-#endif
-
 }
