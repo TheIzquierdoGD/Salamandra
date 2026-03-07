@@ -8,6 +8,8 @@ using namespace geode::prelude;
 
 std::string getHWID();
 
+static EventListener<web::WebTask> authListener;
+
 void AuthGate::sendAuth() {
     web::WebRequest req;
 
@@ -22,22 +24,21 @@ void AuthGate::sendAuth() {
 
     req.bodyJSON(body);
 
-    // enviar request
-    auto future = req.post("https://salamandra.ps.fhgdps.com/api/gate.php");
+    authListener.bind([](web::WebTask::Event* e) {
+        if (auto res = e->getValue()) {
+            auto text = res->string().unwrapOr("error");
 
-    // esperar respuesta
-    auto response = future.wait();
+            if (text == "OK") {
+                log::info("Auth success");
+            }
+            else {
+                log::error("Auth rejected");
+            }
+        }
+        else {
+            log::error("Auth request failed");
+        }
+    });
 
-    if (!response || !response->ok()) {
-        log::error("Auth request failed");
-        return;
-    }
-
-    auto text = response->string().unwrapOr("error");
-
-    if (text == "OK") {
-        log::info("Auth success");
-    } else {
-        log::error("Auth rejected");
-    }
+    authListener.setFilter(req.post("https://salamandra.ps.fhgdps.com/api/gate.php"));
 }
