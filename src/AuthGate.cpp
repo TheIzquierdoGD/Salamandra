@@ -15,7 +15,7 @@ void AuthGate::sendAuth() {
     std::string hwid = getHWID();
     std::string timestamp = std::to_string(time(nullptr));
 
-    // Crear JSON manualmente
+    // Crear JSON correctamente
     matjson::Value body = matjson::Value::object();
     body["password"] = password;
     body["hwid"] = hwid;
@@ -23,9 +23,9 @@ void AuthGate::sendAuth() {
 
     req.bodyJSON(body);
 
-    auto future = req.post("https://salamandra.ps.fhgdps.com/api/gate.php");
+    req.post("https://salamandra.ps.fhgdps.com/api/gate.php")
+        .fetch([](web::WebResponse* res) {
 
-    future.then([](web::WebResponse* res) {
         if (!res) {
             log::error("Auth request failed");
             return;
@@ -40,8 +40,7 @@ void AuthGate::sendAuth() {
 
         if (result == "OK") {
             log::info("Auth success");
-        }
-        else {
+        } else {
             log::error("Auth rejected");
         }
     });
