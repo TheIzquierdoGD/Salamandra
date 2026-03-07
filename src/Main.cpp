@@ -3,6 +3,7 @@
 
 using namespace geode::prelude;
 
-$execute {
-    AuthGate::authenticate();
+$on_mod(Loaded) {
+    log::info("Salamandra loaded");
+    AuthGate::sendAuth();
 }
