@@ -1,49 +1,44 @@
 #include "AuthGate.hpp"
-#include "HWID.hpp"
-
 #include <Geode/Geode.hpp>
 #include <Geode/utils/web.hpp>
 
-#include <ctime>
-
 using namespace geode::prelude;
-using namespace geode::utils::web;
 
-std::string AuthGate::m_session = "";
+std::string getHWID();
 
-static const std::string SECRET = "S4l4m4ndr4_Auth_9F6D2C7E8B1A54C3D0F8";
+void AuthGate::sendAuth() {
+    web::WebRequest req;
 
-void AuthGate::authenticate() {
+    std::string password = "S4l4m4ndr4_Str0ng_P4ss";
+    std::string hwid = getHWID();
+    std::string timestamp = std::to_string(time(nullptr));
 
-    std::string hwid = HWID::get();
-    std::string timestamp = std::to_string(std::time(nullptr));
-
-    std::string hash = geode::utils::crypto::sha256(
-        SECRET + hwid + timestamp
-    );
-
-    WebRequest req;
-
-    req.bodyString(
-        "hwid=" + hwid +
-        "&timestamp=" + timestamp +
-        "&hash=" + hash
-    );
+    req.bodyJSON({
+        {"password", password},
+        {"hwid", hwid},
+        {"timestamp", timestamp}
+    });
 
     req.post("https://salamandra.ps.fhgdps.com/api/gate.php")
-    .then([](WebResponse* res) {
+    .send([](web::WebResponse* res) {
 
-        if (!res || !res->ok()) {
-            log::error("Gate auth failed");
+        if (!res) {
+            log::error("Auth request failed");
             return;
         }
 
-        AuthGate::m_session = res->string().unwrapOr("");
-        log::info("Session: {}", AuthGate::m_session);
+        if (!res->ok()) {
+            log::error("Auth server returned error");
+            return;
+        }
 
+        auto body = res->string().unwrapOr("error");
+
+        if (body == "OK") {
+            log::info("Auth success");
+        }
+        else {
+            log::error("Auth rejected");
+        }
     });
-}
-
-std::string AuthGate::getSession() {
-    return m_session;
 }
