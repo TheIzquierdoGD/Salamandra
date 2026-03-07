@@ -3,6 +3,7 @@
 
 std::string getHWID() {
     DWORD serial = 0;
+
     GetVolumeInformationA(
         "C:\\",
         NULL,
