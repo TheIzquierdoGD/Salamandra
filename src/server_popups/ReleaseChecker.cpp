@@ -7,7 +7,7 @@
 
 using namespace geode::prelude;
 
-#define VERSION_LOCAL "v2.1.0 [Release]"
+#define VERSION_LOCAL "v2.1.1 [Release]"
 #define VERSION_CHECK_URL "https://docs.google.com/spreadsheets/d/e/2PACX-1vTyDwd9A1SJUAVe0FKDf_UVKs6dw0FA4N-1yLeROVKZNdRjJI1DTWqK-0m9JT0WM1dk_e9LGRwsAWwZ/pub?output=csv"
 #define DOWNLOAD_URL "https://github.com/TheIzquierdoGD/Salamandra/releases/latest/download/theizquierdogd.salamandra.geode"
 
