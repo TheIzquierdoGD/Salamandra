@@ -69,8 +69,11 @@ CCNode* createRankNode(std::string rankStr, float scale) {
     else if (pos <= 10) texture = "rankIcon_top50_001.png";  
     else if (pos <= 15) texture = "rankIcon_top200_001.png"; 
     else if (pos <= 20) texture = "rankIcon_top500_001.png"; 
-    else if (pos <= 25) texture = "rankIcon_top2500_001.png";
-    else if (pos <= 40) texture = "rankIcon_all_001.png";
+    else if (pos <= 25) texture = "rankIcon_top1000_001.png"; 
+    else if (pos <= 30) texture = "rankIcon_top2500_001.png";
+    else if (pos <= 35) texture = "rankIcon_top5000_001.png"; 
+    else if (pos <= 40) texture = "rankIcon_top10000_001.png";
+    else if (pos <= 45) texture = "rankIcon_all_001.png";
 
     auto trophy = CCSprite::createWithSpriteFrameName(texture);
     

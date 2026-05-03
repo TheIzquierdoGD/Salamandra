@@ -35,7 +35,7 @@ void parseBadgesCSV(const std::string& data) {
                 id = numFromString<int>(value).unwrapOr(0);
             } else if (key == "Name") {
                 name = value;
-            } else if (key == "Badge") { // Columna única
+            } else if (key == "Badge") {
                 auto badgeParts = string::split(value, ";");
                 for (auto& part : badgeParts) {
                     int t = numFromString<int>(string::trim(part)).unwrapOr(0);
