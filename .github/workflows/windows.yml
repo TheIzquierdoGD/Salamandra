@@ -1,0 +1,32 @@
+name: Build Mod (Base)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Geode Mod
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          bindings: geode-sdk/bindings
+          bindings-ref: main
+          combine: true
+          export-pdb: true
+
+  package:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: geode-sdk/build-geode-mod/combine@main
+        id: build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows Build
+          path: ${{ steps.build.outputs.build-output }}
