@@ -1,0 +1,52 @@
+{
+    "geode": "5.7.1",
+    "gd": {
+        "win": "2.2081",
+        "android": "2.2081",
+        "mac": "2.2081",
+        "ios": "2.2081"
+    },
+    "id": "theizquierdogd.salamandra",
+    "name": "Salamandra",
+    "version": "v2.1.2",
+    "developer": "TheIzquierdoGD",
+    "description": "Mod Oficial de SGDPS!",
+    "early-load": true,
+    "dependencies": {
+        "geode.node-ids": ">=v1.23.3",
+        "jouca.badgesapi": ">=v1.4.1"
+    },
+    "incompatibilities": {
+    "chumiiu.geometry_dash_time_reborn": "1.0.6",
+    "capeling.geometry-dash-lunar": "2.0.6",
+    "teamtcm.geometry-dash-odyssey": "1.0.1",
+    "km7dev.gdps-switcher": "2.0.0",
+    "km7dev.server_api": "4.0.0"
+    },
+    "links": {
+    "source": "https://github.com/TheIzquierdoGD/Salamandra",
+    "community": "https://discord.gg/2Jq8QuhwqF",
+    "homepage": "https://www.facebook.com/The1zquierdoGD"
+    },
+    "tags": [
+        "universal",
+        "online",
+        "interface",
+        "enhancement",
+        "customization",
+        "utility"
+    ],
+    "resources": {
+        "spritesheets": {
+            "Salamandra_Principal": [
+                "resources/main_visual/*.png"
+            ],
+            "SB_BadgeSheet": [
+                "resources/gdps_badges/*.png"
+            ],
+            "Into_ButtonSheet": [
+                "resources/button_misc/*.png"
+            ]
+        }
+    }
+}
