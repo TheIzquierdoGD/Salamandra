@@ -1,52 +1,103 @@
-// Salamandra - SteamFix (Geometry Dash 2.2091 / Windows x64)
+// Salamandra — SteamFix (Windows x64 / Geometry Dash 2.2091)
 //
-// Proteccion ESTRICTA: impide que los logros originados en Salamandra
-// lleguen al administrador de logros de Geometry Dash y a Steam.
+// PROPOSITO: no transmitir los logros del GDPS a la cuenta de Steam.
+// Modo estricto: tambien impide reportar logros internos mientras este
+// mod este activo. No elimina logros existentes ni modifica Steam en disco.
 //
-// IMPORTANTE: para evitar enviar logros por accidente, esta version
-// desactiva tambien la concesion/notificacion de logros internos de GD
-// mientras Salamandra este activo. Las estadisticas normales del juego
-// (estrellas, monedas, etc.) no se interceptan aqui.
-//
-// No modifica Steam en disco ni otras instalaciones de Geometry Dash.
-// No elimina logros obtenidos previamente.
+// Reemplaza el SteamFix.cpp anterior; NO compiles ambas versiones.
+// Este archivo no ha sido comprobado dentro del juego.
 
 #include <Geode/Geode.hpp>
 
 #ifdef GEODE_IS_WINDOWS
-    #include <Geode/modify/AchievementManager.hpp>
-    #include <Geode/modify/MenuLayer.hpp>
-    #include <Windows.h>
-    #include <array>
-    #include <cstdint>
-    #include <unordered_set>
-    #include <utility>
+#include <Geode/modify/GameManager.hpp>
+#include <Geode/modify/AchievementManager.hpp>
+#include <Geode/modify/MenuLayer.hpp>
+
+#include <Windows.h>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <unordered_set>
 
 using namespace geode::prelude;
 
 namespace {
-    // Windows x64: xor eax, eax; ret  (false para funciones bool).
-    constexpr std::array<std::uint8_t, 3> RETURN_FALSE = { 0x31, 0xC0, 0xC3 };
+    // x86-64: xor eax, eax; ret  -> bool false.
+    // NO se parchea SteamAPI_Init, RunCallbacks ni Shutdown.
+    constexpr std::array<std::uint8_t, 3> kReturnFalse = {0x31, 0xC0, 0xC3};
     std::unordered_set<void*> s_patched;
-    bool s_dllWarningShown = false;
-    bool s_hookWarningShown = false;
-    bool s_apiWarningShown = false;
+    bool s_missingSteamReported = false;
+    bool s_noSteamHooksReported = false;
+    bool s_gameManagerReported = false;
+    bool s_achievementManagerReported = false;
 
-    void patchSteamApi() {
+    bool blockFunction(void* address, char const* name) {
+        if (!address) return false;
+        if (s_patched.contains(address)) return true;
+
+        auto result = Mod::get()->patch(
+            address, ByteVector(kReturnFalse.begin(), kReturnFalse.end())
+        );
+        if (!result) {
+            log::warn("SteamFix: no se pudo bloquear {}: {}", name, result.unwrapErr());
+            return false;
+        }
+        s_patched.insert(address);
+        log::info("SteamFix: bloqueado {}", name);
+        return true;
+    }
+
+    // Steamworks ISteamUserStats v013 no tiene RequestCurrentStats en su
+    // vtable; v012 lo tiene como primer metodo (desplazamiento +1).
+    // Los indices restantes coinciden con el orden de isteamuserstats.h.
+    struct Layout {
+        char const* version;
+        std::size_t setStatInt;
+        std::size_t setStatFloat;
+        std::size_t updateAvgRate;
+        std::size_t setAchievement;
+        std::size_t storeStats;
+        std::size_t achievementProgress;
+    };
+    constexpr std::array<Layout, 2> kLayouts = {{
+        {"STEAMUSERSTATS_INTERFACE_VERSION013", 2, 3, 4, 6, 9, 12},
+        {"STEAMUSERSTATS_INTERFACE_VERSION012", 3, 4, 5, 7, 10, 13},
+    }};
+
+    // Si el SDK usa las llamadas C++ de SteamUserStats(), parchear solamente
+    // los exports SteamAPI_ISteamUserStats_* no basta: hay que alcanzar las
+    // funciones virtuales de la interfaz del cliente.
+    bool blockStatsObject(void* object, Layout const& layout) {
+        if (!object) return false;
+        auto** vtable = *reinterpret_cast<void***>(object);
+        if (!vtable) return false;
+
+        bool patched = false;
+        patched |= blockFunction(vtable[layout.setAchievement], "ISteamUserStats::SetAchievement");
+        patched |= blockFunction(vtable[layout.storeStats], "ISteamUserStats::StoreStats");
+        patched |= blockFunction(vtable[layout.achievementProgress], "ISteamUserStats::IndicateAchievementProgress");
+        // Las estadisticas de Steam pueden asociarse a logros automaticos.
+        patched |= blockFunction(vtable[layout.setStatInt], "ISteamUserStats::SetStat(int)");
+        patched |= blockFunction(vtable[layout.setStatFloat], "ISteamUserStats::SetStat(float)");
+        patched |= blockFunction(vtable[layout.updateAvgRate], "ISteamUserStats::UpdateAvgRateStat");
+        return patched;
+    }
+
+    void blockSteamAchievements() {
         static_assert(sizeof(void*) == 8, "SteamFix requiere Windows x64");
-
         HMODULE steam = GetModuleHandleW(L"steam_api64.dll");
         if (!steam) {
-            if (!s_dllWarningShown) {
-                log::warn("SteamFix: steam_api64.dll aun no esta cargada; bloqueo interno activo");
-                s_dllWarningShown = true;
+            if (!s_missingSteamReported) {
+                log::warn("SteamFix: steam_api64.dll no cargada; bloqueo de GD activo; reintentaremos");
+                s_missingSteamReported = true;
             }
             return;
         }
 
-        // Barrera secundaria: evita llamadas directas a los exports planos
-        // de Steamworks. El bloqueo principal esta en AchievementManager.
-        constexpr std::array<char const*, 6> exports = {{
+        bool any = false;
+        constexpr std::array<char const*, 6> kFlatExports = {{
             "SteamAPI_ISteamUserStats_SetAchievement",
             "SteamAPI_ISteamUserStats_StoreStats",
             "SteamAPI_ISteamUserStats_IndicateAchievementProgress",
@@ -54,58 +105,94 @@ namespace {
             "SteamAPI_ISteamUserStats_SetStatFloat",
             "SteamAPI_ISteamUserStats_UpdateAvgRateStat",
         }};
+        for (auto* name : kFlatExports) {
+            any |= blockFunction(reinterpret_cast<void*>(GetProcAddress(steam, name)), name);
+        }
 
-        int found = 0;
-        for (auto* name : exports) {
-            auto* address = reinterpret_cast<void*>(GetProcAddress(steam, name));
-            if (!address) continue;
-            ++found;
-            if (s_patched.contains(address)) continue;
-            auto result = Mod::get()->patch(address, ByteVector(RETURN_FALSE.begin(), RETURN_FALSE.end()));
-            if (result) {
-                s_patched.insert(address);
-                log::info("SteamFix: API de Steam bloqueada: {}", name);
-            } else {
-                log::warn("SteamFix: fallo al bloquear {}: {}", name, result.unwrapErr());
+        // Ruta 1: wrappers publicos de interfaces versionadas.
+        for (auto const& layout : kLayouts) {
+            char exportName[64] = {};
+            // Estos exports pueden no existir en todos los steam_api64.dll.
+            // Si faltan, se utiliza SteamInternal_FindOrCreateUserInterface.
+            auto const* suffix = layout.version + sizeof("STEAMUSERSTATS_INTERFACE_VERSION") - 1;
+            // El sufijo es 013 o 012, por ejemplo.
+            std::snprintf(exportName, sizeof(exportName), "SteamAPI_SteamUserStats_v%s", suffix);
+            auto proc = GetProcAddress(steam, exportName);
+            if (!proc) continue;
+            using Getter = void* (__cdecl*)();
+            auto* obj = reinterpret_cast<Getter>(proc)();
+            any |= blockStatsObject(obj, layout);
+        }
+
+        // Ruta 2: acceso C++ usado por Steamworks internamente.
+        using GetUser = int (__cdecl*)();
+        using FindInterface = void* (__cdecl*)(int, char const*);
+        auto getUser = reinterpret_cast<GetUser>(GetProcAddress(steam, "SteamAPI_GetHSteamUser"));
+        auto findInterface = reinterpret_cast<FindInterface>(
+            GetProcAddress(steam, "SteamInternal_FindOrCreateUserInterface")
+        );
+        if (getUser && findInterface) {
+            int user = getUser();
+            if (user > 0) {
+                for (auto const& layout : kLayouts) {
+                    auto* obj = findInterface(user, layout.version);
+                    any |= blockStatsObject(obj, layout);
+                }
             }
         }
-        if (found == 0 && !s_apiWarningShown) {
-            log::warn("SteamFix: sin exports planos detectados; se mantiene el bloqueo interno estricto");
-            s_apiWarningShown = true;
+
+        if (!any && !s_noSteamHooksReported) {
+            log::warn("SteamFix: no se encontro una via de Steamworks para parchear. Revisa el log.");
+            s_noSteamHooksReported = true;
         }
     }
 }
 
-// BLOQUEO PRINCIPAL: nunca permite que GD publique un logro de Salamandra.
-// No llamamos al metodo original a proposito: en algunas versiones de GD,
-// este metodo comunica el logro a Steam mediante rutas distintas a los
-// exports de steam_api64.dll (incluidas llamadas virtuales).
-class $modify(SalamandraSteamAchievementGuard, AchievementManager) {
+// Primer cortafuegos: esta funcion de GameManager no estaba interceptada
+// en la version anterior. Existe en los bindings de GD 2.2091.
+class $modify(SalamandraSteamFixGameManager, GameManager) {
+    bool init() {
+        blockSteamAchievements();
+        return GameManager::init();
+    }
+
     void reportAchievementWithID(char const* id, int percent, bool dontNotify) {
-        patchSteamApi();
-        if (!s_hookWarningShown) {
-            log::info("SteamFix: AchievementManager::reportAchievementWithID bloqueado (modo estricto)");
-            s_hookWarningShown = true;
+        if (!s_gameManagerReported) {
+            log::warn("SteamFix: GameManager::reportAchievementWithID interceptado (BLOQUEADO)");
+            s_gameManagerReported = true;
         }
-        // No pasar a AchievementManager::reportAchievementWithID().
-        // El progreso normal de GameStatsManager no se modifica aqui.
         (void)id;
         (void)percent;
         (void)dontNotify;
+        // No llamar a GameManager::reportAchievementWithID.
     }
 };
 
-// Segundo intento al abrir el menu, por si Steam no estaba cargado antes.
+// Segundo cortafuegos: otra entrada independiente presente en GD 2.2091.
+class $modify(SalamandraSteamFixAchievementManager, AchievementManager) {
+    void reportAchievementWithID(char const* id, int percent, bool dontNotify) {
+        if (!s_achievementManagerReported) {
+            log::warn("SteamFix: AchievementManager::reportAchievementWithID interceptado (BLOQUEADO)");
+            s_achievementManagerReported = true;
+        }
+        (void)id;
+        (void)percent;
+        (void)dontNotify;
+        // No llamar a AchievementManager::reportAchievementWithID.
+    }
+};
+
+// Segundo intento de configurar Steamworks antes del menu principal.
 class $modify(SalamandraSteamFixMenu, MenuLayer) {
     bool init() {
-        patchSteamApi();
+        blockSteamAchievements();
         return MenuLayer::init();
     }
 };
 
 $on_mod(Loaded) {
-    patchSteamApi();
-    log::info("SteamFix: modo estricto configurado para Salamandra");
+    log::info("SteamFix: Salamandra / bloqueo estricto de logros activado");
+    blockSteamAchievements();
 }
 
-#endif  // GEODE_IS_WINDOWS
+#endif // GEODE_IS_WINDOWS
