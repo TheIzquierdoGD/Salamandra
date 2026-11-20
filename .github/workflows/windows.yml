@@ -5,36 +5,42 @@ on:
 
 jobs:
   build:
-    name: Windows (Geode v6)
     runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@v4
 
+      # Use mod.json as the single source of truth for the Geode SDK version.
+      # Geode CLI expects the Git tag with a leading 'v'.
+      - name: Read Geode SDK tag from mod.json
+        id: geode_tag
+        shell: pwsh
+        run: |
+          $geodeVersion = (Get-Content -LiteralPath 'mod.json' -Raw | ConvertFrom-Json).geode
+          if ([string]::IsNullOrWhiteSpace($geodeVersion)) {
+            throw 'The geode field is missing in mod.json'
+          }
+          $tag = if ($geodeVersion.StartsWith('v')) { $geodeVersion } else { "v$geodeVersion" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
       - name: Build Geode Mod
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: v6.0.0-alpha.3
-          cli: v4.0.1
+          sdk: ${{ steps.geode_tag.outputs.tag }}
           bindings: geode-sdk/bindings
           bindings-ref: main
-          target: Win64
           combine: true
           export-pdb: true
 
   package:
-    name: Package Windows build
     runs-on: ubuntu-latest
     needs: build
 
     steps:
       - uses: geode-sdk/build-geode-mod/combine@main
         id: build
-        with:
-          cli: v4.0.1
 
       - uses: actions/upload-artifact@v4
         with:
           name: Windows Build
           path: ${{ steps.build.outputs.build-output }}
-          if-no-files-found: error
