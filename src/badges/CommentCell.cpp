@@ -8,7 +8,7 @@ using namespace geode::prelude;
 
 namespace {
     std::string badgeNodeID(int type) {
-        return fmt::format("{}/sgdps-badge-{}"s Mod::get()->getID(), type);
+        return fmt::format("{}/sgdps-badge-{}", Mod::get()->getID(), type);
     }
 
     CCSprite* createBadgeSprite(int type) {
