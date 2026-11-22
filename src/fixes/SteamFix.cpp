@@ -1,11 +1,19 @@
 #include <Geode/Geode.hpp>
 
-#ifdef GEODE_IS_WINDOWS
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
 #include <Geode/modify/GameManager.hpp>
 #include <Geode/modify/AchievementManager.hpp>
 #include <Geode/modify/MenuLayer.hpp>
 
+#if defined(GEODE_IS_WINDOWS)
 #include <Windows.h>
+#else
+#include <Geode/modify/PlatformToolbox.hpp>
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <string_view>
+#endif
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -15,12 +23,51 @@
 using namespace geode::prelude;
 
 namespace {
+#if defined(__aarch64__) || defined(__arm64__)
+    constexpr std::array<std::uint8_t, 8> kReturnFalse = {
+        0x00, 0x00, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6
+    };
+#elif defined(__x86_64__) || defined(_M_X64)
     constexpr std::array<std::uint8_t, 3> kReturnFalse = {0x31, 0xC0, 0xC3};
+#else
+#error Unsupported desktop architecture for Salamandra SteamFix
+#endif
+    static_assert(sizeof(void*) == 8);
+
     std::unordered_set<void*> s_patched;
     bool s_missingSteamReported = false;
     bool s_noSteamHooksReported = false;
     bool s_gameManagerReported = false;
     bool s_achievementManagerReported = false;
+
+    struct SteamLibrary {
+#if defined(GEODE_IS_WINDOWS)
+        HMODULE handle = GetModuleHandleW(L"steam_api64.dll");
+        void* symbol(char const* name) const {
+            return handle ? reinterpret_cast<void*>(GetProcAddress(handle, name)) : nullptr;
+        }
+#else
+        void* handle = nullptr;
+        SteamLibrary() {
+            auto count = _dyld_image_count();
+            for (std::uint32_t i = 0; i < count; ++i) {
+                auto* path = _dyld_get_image_name(i);
+                if (!path) continue;
+                std::string_view name(path);
+                auto slash = name.find_last_of('/');
+                if (slash != std::string_view::npos) name.remove_prefix(slash + 1);
+                if (name != "libsteam_api.dylib" && name != "libsteam_api64.dylib") continue;
+                handle = dlopen(path, RTLD_LAZY | RTLD_NOLOAD);
+                if (handle) break;
+            }
+            if (!handle) handle = dlopen("libsteam_api.dylib", RTLD_LAZY | RTLD_NOLOAD);
+        }
+        ~SteamLibrary() { if (handle) dlclose(handle); }
+        void* symbol(char const* name) const {
+            return handle ? dlsym(handle, name) : nullptr;
+        }
+#endif
+    };
 
     bool blockFunction(void* address, char const* name) {
         if (!address) return false;
@@ -68,11 +115,10 @@ namespace {
     }
 
     void blockSteamAchievements() {
-        static_assert(sizeof(void*) == 8, "SteamFix requiere Windows x64");
-        HMODULE steam = GetModuleHandleW(L"steam_api64.dll");
-        if (!steam) {
+        SteamLibrary steam;
+        if (!steam.handle) {
             if (!s_missingSteamReported) {
-                log::warn("SteamFix: steam_api64.dll no cargada; bloqueo de GD activo; reintentaremos");
+                log::warn("SteamFix: biblioteca Steam no cargada; bloqueo de GD activo; reintentaremos");
                 s_missingSteamReported = true;
             }
             return;
@@ -88,25 +134,25 @@ namespace {
             "SteamAPI_ISteamUserStats_UpdateAvgRateStat",
         }};
         for (auto* name : kFlatExports) {
-            any |= blockFunction(reinterpret_cast<void*>(GetProcAddress(steam, name)), name);
+            any |= blockFunction(steam.symbol(name), name);
         }
 
         for (auto const& layout : kLayouts) {
             char exportName[64] = {};
             auto const* suffix = layout.version + sizeof("STEAMUSERSTATS_INTERFACE_VERSION") - 1;
             std::snprintf(exportName, sizeof(exportName), "SteamAPI_SteamUserStats_v%s", suffix);
-            auto proc = GetProcAddress(steam, exportName);
+            auto proc = steam.symbol(exportName);
             if (!proc) continue;
-            using Getter = void* (__cdecl*)();
+            using Getter = void* (*)();
             auto* obj = reinterpret_cast<Getter>(proc)();
             any |= blockStatsObject(obj, layout);
         }
 
-        using GetUser = int (__cdecl*)();
-        using FindInterface = void* (__cdecl*)(int, char const*);
-        auto getUser = reinterpret_cast<GetUser>(GetProcAddress(steam, "SteamAPI_GetHSteamUser"));
+        using GetUser = int (*)();
+        using FindInterface = void* (*)(int, char const*);
+        auto getUser = reinterpret_cast<GetUser>(steam.symbol("SteamAPI_GetHSteamUser"));
         auto findInterface = reinterpret_cast<FindInterface>(
-            GetProcAddress(steam, "SteamInternal_FindOrCreateUserInterface")
+            steam.symbol("SteamInternal_FindOrCreateUserInterface")
         );
         if (getUser && findInterface) {
             int user = getUser();
@@ -152,17 +198,47 @@ class $modify(SalamandraSteamFixAchievementManager, AchievementManager) {
         (void)percent;
         (void)dontNotify;
     }
+
+#ifdef GEODE_IS_MACOS
+    void reportPlatformAchievementWithID(char const*, int) {
+        static bool reported = false;
+        if (!reported) {
+            log::warn("SteamFix: AchievementManager::reportPlatformAchievementWithID interceptado (BLOQUEADO)");
+            reported = true;
+        }
+    }
+#endif
 };
+
+#ifdef GEODE_IS_MACOS
+class $modify(SalamandraSteamFixPlatformToolbox, PlatformToolbox) {
+    static void reportAchievementWithID(char const*, int) {
+        static bool reported = false;
+        if (!reported) {
+            log::warn("SteamFix: PlatformToolbox::reportAchievementWithID interceptado (BLOQUEADO)");
+            reported = true;
+        }
+    }
+};
+#endif
 
 class $modify(SalamandraSteamFixMenu, MenuLayer) {
     bool init() {
         blockSteamAchievements();
-        return MenuLayer::init();
+        auto result = MenuLayer::init();
+        if (result) blockSteamAchievements();
+        return result;
     }
 };
 
 $on_mod(Loaded) {
-    log::info("SteamFix: Salamandra / bloqueo estricto de logros activado");
+#if defined(GEODE_IS_WINDOWS)
+    log::info("SteamFix: Salamandra / bloqueo estricto de logros activado (Windows x64)");
+#elif defined(__aarch64__) || defined(__arm64__)
+    log::info("SteamFix: Salamandra / bloqueo estricto de logros activado (macOS ARM64)");
+#else
+    log::info("SteamFix: Salamandra / bloqueo estricto de logros activado (macOS Intel)");
+#endif
     blockSteamAchievements();
 }
 
