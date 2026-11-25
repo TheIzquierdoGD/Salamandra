@@ -1,6 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/CCHttpClient.hpp>
 #include <Geode/modify/MenuLayer.hpp>
+#include <Geode/modify/GameLevelManager.hpp>
 #include <Geode/utils/async.hpp>
 #include <Geode/utils/web.hpp>
 #include <algorithm>
@@ -59,6 +60,55 @@ namespace {
         return std::string(path.substr(0, path.find_first_of("?#")));
     }
 
+    bool setFormToken(CCHttpRequest* req) {
+        if (req->getRequestType() != CCHttpRequest::kHttpPost) return false;
+        for (auto const& h : req->getHeaders()) {
+            std::string header = h.c_str();
+            std::transform(header.begin(), header.end(), header.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            auto colon = header.find(':');
+            if (colon == std::string::npos) continue;
+            if (string::trim(header.substr(0, colon)) != "content-type") continue;
+            auto value = string::trim(header.substr(colon + 1));
+            if (!value.starts_with("application/x-www-form-urlencoded")) return false;
+        }
+        auto size = req->getRequestDataSize();
+        if (size < 0) return false;
+        std::string body;
+        if (size > 0) {
+            auto* data = req->getRequestData();
+            if (!data) return false;
+            body.assign(data, static_cast<size_t>(size));
+            if (body.find('\0') != std::string::npos || body.find('=') == std::string::npos) return false;
+        }
+        constexpr std::string_view field = "__salamandra_token";
+        std::string clean;
+        bool first = true;
+        size_t pos = 0;
+        while (pos < body.size()) {
+            auto end = body.find('&', pos);
+            auto part = std::string_view(body).substr(pos, end == std::string::npos ? end : end - pos);
+            if (part.substr(0, part.find('=')) != field) {
+                if (!first) clean += '&';
+                clean += part;
+                first = false;
+            }
+            if (end == std::string::npos) break;
+            pos = end + 1;
+        }
+        if (!hasToken()) {
+            if (clean != body) req->setRequestData(clean.c_str(), static_cast<unsigned int>(clean.size()));
+            return false;
+        }
+        if (!clean.empty() && clean.back() != '&') clean += '&';
+        clean += field;
+        clean += '=';
+        clean += s_token;
+        req->setRequestData(clean.c_str(), static_cast<unsigned int>(clean.size()));
+        return true;
+    }
+
     void setTokenHeader(CCHttpRequest* req) {
         auto old = req->getHeaders();
         auto headers = old;
@@ -70,13 +120,31 @@ namespace {
             auto header = std::string("X-Salamandra-Token: ") + s_token;
             headers.push_back(header.c_str());
         }
+        bool form = setFormToken(req);
+        if (form) {
+            headers.clear();
+            bool contentType = false;
+            for (auto const& h : old) {
+                std::string name = h.c_str();
+                name.resize(name.find(':') == std::string::npos ? name.size() : name.find(':'));
+                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+                auto trimmed = string::trim(name);
+                if (trimmed == "content-type") contentType = true;
+                if (!isTokenHeader(h.c_str()) && trimmed != "content-length") headers.push_back(h);
+            }
+            if (!contentType) headers.push_back("Content-Type: application/x-www-form-urlencoded");
+            auto header = std::string("X-Salamandra-Token: ") + s_token;
+            headers.push_back(header.c_str());
+        }
         req->setHeaders(headers);
         bool present = false;
         for (auto const& h : req->getHeaders()) {
             if (isTokenHeader(h.c_str())) present = true;
         }
-        log::info("Salamandra Auth: ruta={} cabecera_token={} token_valido={}",
-                  safePath(req->getUrl()), present, hasToken());
+        log::info("Salamandra Auth: ruta={} cabecera_token={} token_POST={} bytes_POST={} token_valido={}",
+                  safePath(req->getUrl()), present, form, req->getRequestDataSize(), hasToken());
     }
 
     void flushPending() {
@@ -285,6 +353,26 @@ class $modify(MyHttpClient, CCHttpClient) {
         log::warn("Salamandra Auth: peticion sin token; servidor protegido debe rechazarla");
         setTokenHeader(req);
         return CCHttpClient::send(req);
+    }
+};
+
+class $modify(SalamandraAuthResponse, GameLevelManager) {
+    void onProcessHttpRequestCompleted(CCHttpClient* client, CCHttpResponse* response) {
+        if (response) {
+            auto* req = response->getHttpRequest();
+            if (req && req->getUrl() && isProtected(req->getUrl())) {
+                auto* data = response->getResponseData();
+                auto size = data ? data->size() : 0;
+                std::string_view body;
+                if (size) body = std::string_view(data->data(), size);
+                while (!body.empty() && (body.front() == ' ' || body.front() == '\n' || body.front() == '\r' || body.front() == '\t')) body.remove_prefix(1);
+                while (!body.empty() && (body.back() == ' ' || body.back() == '\n' || body.back() == '\r' || body.back() == '\t' || body.back() == '\0')) body.remove_suffix(1);
+                auto kind = body.empty() ? "VACIO" : body == "-1" ? "-1" : body == "-2" ? "-2" : body.front() == '<' ? "HTML_O_XML" : "DATOS";
+                log::info("Salamandra Auth: RESPUESTA {} HTTP {} bytes={} resultado={}",
+                          safePath(req->getUrl()), response->getResponseCode(), size, kind);
+            }
+        }
+        GameLevelManager::onProcessHttpRequestCompleted(client, response);
     }
 };
 
