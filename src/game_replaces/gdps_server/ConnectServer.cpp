@@ -26,6 +26,7 @@ namespace {
     Clock::time_point s_retry{};
     bool s_fetching = false;
     bool s_timerStarted = false;
+    bool s_probeStarted = false;
     unsigned int s_attempt = 0;
     std::vector<CCHttpRequest*> s_pending;
     thread_local CCHttpRequest* s_replay = nullptr;
@@ -50,6 +51,14 @@ namespace {
         });
     }
 
+    std::string safePath(std::string_view url) {
+        auto scheme = url.find("://");
+        auto start = scheme == std::string_view::npos ? 0 : url.find('/', scheme + 3);
+        if (start == std::string_view::npos) return "/";
+        auto path = url.substr(start);
+        return std::string(path.substr(0, path.find_first_of("?#")));
+    }
+
     void setTokenHeader(CCHttpRequest* req) {
         auto old = req->getHeaders();
         auto headers = old;
@@ -62,6 +71,12 @@ namespace {
             headers.push_back(header.c_str());
         }
         req->setHeaders(headers);
+        bool present = false;
+        for (auto const& h : req->getHeaders()) {
+            if (isTokenHeader(h.c_str())) present = true;
+        }
+        log::info("Salamandra Auth: ruta={} cabecera_token={} token_valido={}",
+                  safePath(req->getUrl()), present, hasToken());
     }
 
     void flushPending() {
@@ -78,6 +93,28 @@ namespace {
             s_replay = previous;
             req->release();
         }
+    }
+
+    void probeGuard() {
+        if (!hasToken()) return;
+        log::info("Salamandra Auth: PROBE POST /salamandra_probe.php");
+        async::spawn(
+            web::WebRequest()
+                .userAgent("Salamandra/2.1.2")
+                .header("X-Salamandra-Token", s_token)
+                .followRedirects(false)
+                .timeout(asp::Duration::fromSecs(15))
+                .post("https://salamandra.ps.fhgdps.com/salamandra_probe.php"),
+            [](web::WebResponse response) {
+                auto body = response.string();
+                bool accepted = response.ok() && body && string::trim(body.unwrap()) == "GUARD_OK";
+                log::info("Salamandra Auth: PROBE HTTP {} ({} bytes), guard={}",
+                          response.code(), response.data().size(), accepted ? "OK" : "ERROR");
+                if (!accepted && body && string::trim(body.unwrap()) == "-1") {
+                    log::warn("Salamandra Auth: PROBE token rechazado por PHP; revisar error_log");
+                }
+            }
+        );
     }
 
     void requestToken() {
@@ -110,6 +147,10 @@ namespace {
                         s_refresh = started + 600s;
                         s_retry = {};
                         log::info("Salamandra Auth: TOKEN OK; renovacion en 600 s, margen local 60 s");
+                        if (!s_probeStarted) {
+                            s_probeStarted = true;
+                            probeGuard();
+                        }
                         flushPending();
                         return;
                     }
@@ -220,6 +261,7 @@ class $modify(MyHttpClient, CCHttpClient) {
             constexpr std::string_view dbPrefix = "/database/";
             std::string target = std::string(kBase) + "/";
             if (path.starts_with(dbPrefix)) target += path.substr(dbPrefix.size());
+            log::info("Salamandra Auth: redireccion {} -> {}", safePath(url), safePath(target));
             req->setUrl(target.c_str());
             url = std::move(target);
         }
@@ -236,7 +278,7 @@ class $modify(MyHttpClient, CCHttpClient) {
         if (s_fetching && s_pending.size() < 64) {
             req->retain();
             s_pending.push_back(req);
-            log::debug("Salamandra Auth: peticion pendiente ({} en cola)", s_pending.size());
+            log::info("Salamandra Auth: en cola {} ({} pendientes)", safePath(url), s_pending.size());
             return;
         }
 
