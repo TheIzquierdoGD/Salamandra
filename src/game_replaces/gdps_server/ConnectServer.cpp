@@ -26,6 +26,7 @@ namespace {
     Clock::time_point s_retry{};
     bool s_fetching = false;
     bool s_timerStarted = false;
+    unsigned int s_attempt = 0;
     std::vector<CCHttpRequest*> s_pending;
     thread_local CCHttpRequest* s_replay = nullptr;
 
@@ -66,6 +67,9 @@ namespace {
     void flushPending() {
         auto pending = std::move(s_pending);
         s_pending.clear();
+        if (!pending.empty()) {
+            log::info("Salamandra Auth: enviando {} peticiones pendientes; token valido={}", pending.size(), hasToken());
+        }
         for (auto* req : pending) {
             setTokenHeader(req);
             auto* previous = s_replay;
@@ -80,28 +84,62 @@ namespace {
         auto started = Clock::now();
         if (s_fetching || started < s_retry) return;
         s_fetching = true;
+        auto attempt = ++s_attempt;
+        log::info("Salamandra Auth: POST salamandra_token.php (intento {}, {})", attempt,
+                  hasToken() ? "renovacion" : "token inicial");
         async::spawn(
             web::WebRequest()
+                .userAgent("Salamandra/2.1.2")
                 .header("X-Salamandra-Key", kBootstrapKey)
+                .header("Content-Type", "application/json")
+                .bodyString(fmt::format("{{\"key\":\"{}\"}}", kBootstrapKey))
                 .followRedirects(false)
                 .timeout(asp::Duration::fromSecs(15))
                 .post(kTokenURL),
-            [started](web::WebResponse response) {
+            [started, attempt](web::WebResponse response) {
                 s_fetching = false;
-                if (response.ok()) {
-                    auto body = response.string();
-                    if (body && isHexToken(body.unwrap()) && Clock::now() < started + 840s) {
-                        s_token = body.unwrap();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
+                log::info("Salamandra Auth: respuesta intento {} HTTP {} ({} ms, {} bytes)",
+                          attempt, response.code(), elapsed, response.data().size());
+                auto body = response.string();
+                if (response.ok() && body) {
+                    auto value = string::trim(body.unwrap());
+                    if (isHexToken(value) && Clock::now() < started + 840s) {
+                        s_token = std::move(value);
                         s_expiry = started + 840s;
                         s_refresh = started + 600s;
                         s_retry = {};
-                        log::info("Salamandra: token temporal renovado");
+                        log::info("Salamandra Auth: TOKEN OK; renovacion en 600 s, margen local 60 s");
                         flushPending();
                         return;
                     }
+                    log::warn("Salamandra Auth: HTTP exitoso pero token invalido ({} caracteres)", value.size());
+                } else if (response.code() == 403) {
+                    log::warn("Salamandra Auth: HTTP 403; clave rechazada o firewall del hosting");
+                } else if (response.code() == 404) {
+                    log::warn("Salamandra Auth: HTTP 404; revisar ruta de salamandra_token.php");
+                } else if (response.code() == 405) {
+                    log::warn("Salamandra Auth: HTTP 405; el servidor no acepta POST");
+                } else if (response.code() == 429) {
+                    log::warn("Salamandra Auth: HTTP 429; limite de emision alcanzado");
+                } else if (response.code() == 503 || response.code() == 500) {
+                    log::warn("Salamandra Auth: error PHP/SQL; revisar error_log de cPanel");
+                } else if (response.redirected()) {
+                    log::warn("Salamandra Auth: redireccion HTTP no permitida; revisar URL y SSL");
+                } else {
+                    log::warn("Salamandra Auth: fallo de red o respuesta no esperada (codigo {})", response.code());
+                }
+                if (body) {
+                    auto value = string::trim(body.unwrap());
+                    for (auto code : {"ERR_METHOD", "ERR_KEY_MISSING", "ERR_KEY_INVALID", "ERR_DB_CONFIG", "ERR_DB_CONNECT", "ERR_RATE_LIMIT", "ERR_SQL"}) {
+                        if (value == code) {
+                            log::warn("Salamandra Auth: diagnostico PHP {}", code);
+                            break;
+                        }
+                    }
                 }
                 s_retry = Clock::now() + 30s;
-                log::warn("Salamandra: no se pudo renovar el token (HTTP {})", response.code());
+                log::warn("Salamandra Auth: reintento en 30 s; token anterior valido={}", hasToken());
                 flushPending();
             }
         );
@@ -126,6 +164,7 @@ namespace {
         scheduler->scheduleSelector(schedule_selector(TokenTimer::tick), timer, 5.f, false);
         timer->release();
         s_timerStarted = true;
+        log::info("Salamandra Auth: temporizador de renovacion activo (5 s)");
     }
 
     std::string_view afterHost(std::string_view url, std::string_view host) {
@@ -150,6 +189,7 @@ namespace {
 class $modify(SalamandraTokenMenu, MenuLayer) {
     bool init() {
         if (!MenuLayer::init()) return false;
+        log::debug("Salamandra Auth: MenuLayer inicializado");
         startTimer();
         refreshIfNeeded();
         return true;
@@ -188,6 +228,7 @@ class $modify(MyHttpClient, CCHttpClient) {
 
         refreshIfNeeded();
         if (hasToken()) {
+            log::debug("Salamandra Auth: peticion PHP con token");
             setTokenHeader(req);
             return CCHttpClient::send(req);
         }
@@ -195,10 +236,16 @@ class $modify(MyHttpClient, CCHttpClient) {
         if (s_fetching && s_pending.size() < 64) {
             req->retain();
             s_pending.push_back(req);
+            log::debug("Salamandra Auth: peticion pendiente ({} en cola)", s_pending.size());
             return;
         }
 
+        log::warn("Salamandra Auth: peticion sin token; servidor protegido debe rechazarla");
         setTokenHeader(req);
         return CCHttpClient::send(req);
     }
 };
+
+$on_mod(Loaded) {
+    log::info("Salamandra Auth: modulo de autenticacion cargado");
+}
